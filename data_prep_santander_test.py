@@ -1,9 +1,6 @@
 
 # coding: utf-8
 
-# In[1]:
-
-
 # data_prep.py
 import warnings, copy
 warnings.filterwarnings('ignore')
@@ -15,78 +12,41 @@ import matplotlib.pyplot as plt
 # sns.set(style="whitegrid", color_codes=True)
 import cPickle
 
-
-# In[2]:
-
-
 work_dir = '/home/dawna/tts/mw545/DVExp/hh/'
+
+# Get training header list:
+input_list_file_name = work_dir + 'input_list.cpk'
+load_from_file = False
+if load_from_file:
+  input_list = cPickle.load(open(input_list_file_name, 'rb'))
+else:
+  prices_raw = pd.read_csv(work_dir + 'train.csv')
+  meta_data = prices_raw.drop(['ID', 'target'], axis=1)
+  input_list = list(meta_data)
+  prices = copy.deepcopy(prices_raw)
+  for item in input_list:
+      prices[item] = prices[item].replace(0,np.NaN)
+  prices = prices.dropna(axis=1, how='all')
+  meta_data = prices.drop(['ID', 'target'], axis=1)
+  input_list = list(meta_data)
+  cPickle.dump(input_list, open(input_list_file_name, 'wb'))
+  
 prices_raw = pd.read_csv(work_dir + 'test.csv')
 
+# Remove previous all 0 columns
+prices = prices_raw[input_list]
+IDs    = prices_raw['ID']
+test_ID_file_name=work_dir+"test_ID.dat"
+cPickle.dump(IDs, open(test_ID_file_name, 'wb'))
 
-# In[5]:
-
-
-prices_raw.head(3)
-
-
-# In[6]:
-
-
-meta_data = prices_raw.drop(['ID'], axis=1)
-input_list = list(meta_data)
-prices_raw.head(3)
-
-
-# In[7]:
-
-
-prices = copy.deepcopy(prices_raw)
-for item in input_list:
-    prices[item] = prices[item].replace(0,np.NaN)
     
-    
-
-
-# In[8]:
-
-
-prices.head(3)
-
-
-# In[9]:
-
-
-prices = prices.dropna(axis=1, how='all')
-prices.head()
-meta_data = prices.drop(['ID'], axis=1)
-input_list = list(meta_data)
-
-
-# In[12]:
-
-
-print len(input_list)
-prices.head(3)
-
-
-# In[18]:
-
-
 prices_binary = copy.deepcopy(prices)
 for item in input_list:
-    prices_binary[item] = prices_binary[item].replace(np.NaN, 0)
+    # prices_binary[item] = prices_binary[item].replace(np.NaN, 0)
     prices_binary[item+'new'] = np.where(prices_binary[item] > 0, 1, 0)
 
 
-# In[19]:
-
-
 print prices_binary.shape
-prices_binary.head()
-
-
-# In[20]:
-
 
 input_list_new = []
 input_list_new += input_list
@@ -94,31 +54,13 @@ for item in input_list:
     input_list_new.append(item+'new')
 print len(input_list_new)
 
-
-# In[21]:
-
-
 X_test = np.array(prices_binary[input_list_new].values)
 # y_train = np.array(prices_binary['target'].values)
 data = {"x_test": X_test,
           # "y_train": y_train,
 }
 
-
-# In[22]:
-
-
 data['x_test'].shape
-
-
-# In[23]:
-
-
-# data['y_train'].shape
-
-
-# In[25]:
-
 
 min_max_file_name=work_dir+"min_max.dat"
 data_norm_file_name=work_dir+"data_norm_test.dat"
