@@ -69,8 +69,8 @@ else:
 data_norm = {}
 x_diff = (min_max["x_max"] - min_max["x_min"])
 y_diff = (min_max["y_max"] - min_max["y_min"])
-data_norm["x_train"] = (data["x_train"] - min_max["x_min"][None,:]) / x_diff[None,:] * 2. - 1.
-data_norm["y_train"] = (data["y_train"] - min_max["y_min"]) / y_diff * 2. - 1.
+data_norm["x_train"] = data["x_train"] / min_max["x_max"][None,:]
+data_norm["y_train"] = data["y_train"] / min_max["y_max"])
 
 cPickle.dump(data_norm, open(data_norm_file_name, 'wb'))
 
