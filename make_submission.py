@@ -13,16 +13,22 @@ import matplotlib.pyplot as plt
 import cPickle
 
 work_dir = '/home/dawna/tts/mw545/DVExp/hh/'
+work_dir = '/home/dawna/tts/mw545/DVExp/hh/'
+sub_csv  = work_dir + 'submission.csv'
 
 test_ID_file_name=work_dir+"test_ID.dat"
 IDs = cPickle.load(open(test_ID_file_name, 'rb'))
 # IDs = prices_raw['ID']
 
-predict_output_file_name = work_dir+"predict_output.dat"
-predict_output = cPickle.load(open(predict_output_file_name, 'rb'))
+# predict_output_file_name = work_dir+"predict_output.dat"
+# predict_output = cPickle.load(open(predict_output_file_name, 'rb'))
+T = 49342
+predict_output = numpy.zeros((T,1))
+for i in range(T):
+  predict_output[i, 0] = i
 
 assert IDs.values.shape[0] == predict_output.shape[0]
 
 for i in range(IDs.values.shape[0]):
   IDs[i] ...
-  predict_output[i] ...
+  predict_output[i, 0] ...
