@@ -20,3 +20,9 @@ IDs = cPickle.load(open(test_ID_file_name, 'rb'))
 
 predict_output_file_name = work_dir+"predict_output.dat"
 predict_output = cPickle.load(open(predict_output_file_name, 'rb'))
+
+assert IDs.values.shape[0] == predict_output.shape[0]
+
+for i in range(IDs.values.shape[0]):
+  IDs[i] ...
+  predict_output[i] ...
