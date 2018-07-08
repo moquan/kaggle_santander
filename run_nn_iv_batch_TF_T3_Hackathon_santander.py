@@ -8,33 +8,34 @@ import cPickle
 # import numpy as np
 logger = make_logger("Main")
 
-min_max_file_name="/home/dawna/tts/mw545/DVExp/hh/min_max.dat"
+work_dir = "/home/dawna/tts/mw545/DVExp/hh/"
+scratch_dir = "/scratch/tmp-mw545/hh/"
+if not os.path.exists(scratch_dir):
+    os.makedirs(scratch_dir)
+
+min_max_file_name=work_dir+"min_max.dat"
 logger.info('loading min max file '+min_max_file_name)
 min_max = cPickle.load(open(min_max_file_name, 'rb'))
 y_diff = (min_max["y_max"] - min_max["y_min"])
 
-data_norm_file_name="/home/dawna/tts/mw545/DVExp/hh/data_norm.dat"
-logger.info('loading normalised data file '+data_norm_file_name)
-data_norm = cPickle.load(open(data_norm_file_name, 'rb'))
-logger.info(data_norm["x_train"].shape)
-logger.info(data_norm["y_train"].shape)
-
 class acoustic_model_cfg(object):
     def __init__(self, work_dir="/home/dawna/tts/mw545/DVExp/hh"):
 
-        self.input_dim  = 21
-        # self.input_dim  = 4735 * 2
+        # self.input_dim  = 21
+        self.input_dim  = 9470 
 
-        self.batch_size = 256
-        self.learning_rate = 0.001
-        self.num_epoch     = 2000
+        self.batch_size = 4459
+        self.learning_rate = 0.0001
+        self.num_epoch     = 200000
+        self.early_stop_epoch = 5
         # self.rnn_layer_type = ['LSTM'] * 4
-        self.rnn_layer_type = ['Tanh'] * 10
+        self.rnn_layer_type = ['Relu'] * 30
         # self.rnn_layer_type = ['TANH', 'LSTM', 'LSTM', 'TANH', 'TANH']
         # self.high_way = [False, False, False, True, True]
-        self.high_way = [False, True, True, True, True, True, True, True, True, True]
+        # self.high_way = [False] + [True] * 29
+        self.high_way = [False] * 30
         # self.rnn_layer_size = [ 128 ] * 5
-        self.rnn_layer_size = [ 1024 ] * 10
+        self.rnn_layer_size = [ 2048 ] * 30
         self.num_rnn_layers = len(self.rnn_layer_type)
         assert self.num_rnn_layers == len(self.rnn_layer_size)
         self.gpu_id = 0
@@ -42,8 +43,8 @@ class acoustic_model_cfg(object):
 
         self.output_dim = 1
 
-        exp_dir = "exp_dnn_"+str(self.num_rnn_layers)
-        for i in range(self.num_rnn_layers):
+        exp_dir = "exp_dnn_mse_"+str(self.num_rnn_layers)
+        for i in range(min(self.num_rnn_layers, 5)):
             exp_dir = exp_dir + '_' + self.rnn_layer_type[i] + str(self.rnn_layer_size[i]) + str(self.high_way[i])[0]
         self.exp_dir = os.path.join(work_dir, exp_dir)
         if not os.path.exists(self.exp_dir):
@@ -59,15 +60,15 @@ class acoustic_model_cfg(object):
             self.DNNGEN    = True
         else:
             self.TRAINDNN  = False
-            self.DNNGEN    = False
+            self.DNNGEN    = True
 
 class build_acoustic_model(object):
 
     def __init__(self, amcfg):
 
         with tf.device('/device:GPU:'+str(amcfg.gpu_id)):
-            self.am_input    = tf.placeholder(tf.float32, shape=[amcfg.batch_size, amcfg.input_dim])
-            self.am_target   = tf.placeholder(tf.float32, shape=[amcfg.batch_size, amcfg.output_dim])
+            self.am_input    = tf.placeholder(tf.float64, shape=[amcfg.batch_size, amcfg.input_dim])
+            self.am_target   = tf.placeholder(tf.float64, shape=[amcfg.batch_size, amcfg.output_dim])
 
             self.output_list = []
             self.rnn_layers = {}
@@ -76,7 +77,7 @@ class build_acoustic_model(object):
             self.rnn_init_c    = {}
             self.rnn_init_h    = {}
             self.learning_rate = amcfg.learning_rate
-            self.learning_rate_holder = tf.placeholder(dtype=tf.float32, name='acoustic_learning_rate_holder')
+            self.learning_rate_holder = tf.placeholder(dtype=tf.float64, name='acoustic_learning_rate_holder')
 
             for i in range(amcfg.num_rnn_layers):
                 with tf.variable_scope('acoustic_layer_'+str(i)):
@@ -99,23 +100,26 @@ class build_acoustic_model(object):
                 # rnn_layer_state.append(layer_state_temp)
             with tf.variable_scope('acoustic_final_layer'):
                 layer_input = self.rnn_layer_output[amcfg.num_rnn_layers-1]
-                self.final_layer_output = tf.contrib.layers.fully_connected(inputs=layer_input, num_outputs=amcfg.output_dim, activation_fn=None)
+                self.final_layer_output = tf.contrib.layers.fully_connected(inputs=layer_input, num_outputs=amcfg.output_dim, activation_fn=tf.nn.relu)
 
-                self.zero_output = tf.zeros(shape=[amcfg.batch_size, amcfg.output_dim], dtype=tf.float32)
-                self.denorm_labels  = tf.maximum((self.am_target 
-                    + tf.constant(float(1.), dtype=tf.float32)) * tf.constant(float(y_diff/2.), dtype=tf.float32) + tf.constant(min_max["y_min"], dtype=tf.float32), self.zero_output)
-                self.denorm_predict = tf.maximum((self.final_layer_output 
-                    + tf.constant(float(1.), dtype=tf.float32)) * tf.constant(float(y_diff/2.), dtype=tf.float32) + tf.constant(min_max["y_min"], dtype=tf.float32), self.zero_output)
+                # self.zero_output = tf.zeros(shape=[amcfg.batch_size, amcfg.output_dim])
+                self.denorm_labels  = (self.am_target 
+                    + tf.constant(1., dtype=tf.float64)) * tf.constant(y_diff/2., dtype=tf.float64) + tf.constant(min_max["y_min"], dtype=tf.float64)
+                # self.denorm_predict = tf.maximum((self.final_layer_output 
+                    # + tf.constant(1.)) * tf.constant(y_diff/2.) + tf.constant(min_max["y_min"]), self.zero_output)
+                self.denorm_predict = (self.final_layer_output 
+                    + tf.constant(1., dtype=tf.float64)) * tf.constant(y_diff/2., dtype=tf.float64) + tf.constant(min_max["y_min"], dtype=tf.float64)
 
-                self.log_labels  = tf.log( self.denorm_labels  + tf.constant(float(1.), dtype=tf.float32))
-                self.log_predict = tf.log( self.denorm_predict + tf.constant(float(1.), dtype=tf.float32))
+                self.log_labels  = tf.log( self.denorm_labels  + tf.constant(1., dtype=tf.float64))
+                self.log_predict = tf.log( self.denorm_predict + tf.constant(1., dtype=tf.float64))
 
                 self.loss = tf.losses.mean_squared_error(labels=self.log_labels, predictions=self.log_predict)
+                self.mse  = tf.losses.mean_squared_error(labels=self.am_target, predictions=self.final_layer_output)
 
                 # self.loss  = tf.losses.mean_squared_error(labels=self.am_target, predictions=self.final_layer_output)
-                # self.accuracy = tf.count_nonzero(tf.greater(self.am_target * self.final_layer_output, 0.), dtype=tf.float32) * tf.constant(float(1./amcfg.batch_size), name="1_/batch_size", dtype=tf.float32)
+                # self.accuracy = tf.count_nonzero(tf.greater(self.am_target * self.final_layer_output, 0.)) * tf.constant(float(1./amcfg.batch_size), name="1_/batch_size")
 
-            self.train_step  = tf.train.AdamOptimizer(learning_rate=self.learning_rate_holder,epsilon=1.e-03).minimize(self.loss)
+            self.train_step  = tf.train.AdamOptimizer(learning_rate=self.learning_rate_holder,epsilon=1.e-03).minimize(self.mse)
 
             # init = tf.initialize_all_variables()
             self.init = tf.global_variables_initializer()
@@ -150,7 +154,20 @@ def make_a_batch(amcfg, data_x, data_y, batch_size):
         #     y[j, 1] = 1.
     return x, y
 
-def train_NN_iv():
+def make_a_batch_gen(amcfg, data_x, batch_idx, batch_size):
+    x = numpy.zeros((amcfg.batch_size, amcfg.input_dim))
+    y = numpy.zeros((amcfg.batch_size, amcfg.output_dim))
+
+    T = data_x.shape[0]
+    start_idx = batch_idx * batch_size
+    end_idx   = min((batch_idx+1) * batch_size, T) # Actually this is N in 0:N, so last index is N-1
+    data_len  = end_idx - start_idx
+
+    x[:data_len] = data_x[start_idx:end_idx]
+
+    return x, y
+
+def train_NN():
 
     amcfg = acoustic_model_cfg()
     # amcfg.iv_dim = iv_size
@@ -164,33 +181,46 @@ def train_NN_iv():
     sess.run(rnn_model.init)
     # rnn_model.saver.restore(sess, nnets_file_name)
 
+    data_norm_file_name=scratch_dir+"data_norm.dat"
+    try:
+        logger.info('loading normalised data file '+data_norm_file_name)
+        data_norm = cPickle.load(open(data_norm_file_name, 'rb'))
+    except:
+        logger.info('copy to scratch normalised data file '+data_norm_file_name)
+        shutil.copyfile(work_dir+"data_norm.dat", data_norm_file_name)
+        logger.info('loading normalised data file '+data_norm_file_name)
+        data_norm = cPickle.load(open(data_norm_file_name, 'rb'))
+    logger.info(data_norm["x_train"].shape)
+    logger.info(data_norm["y_train"].shape)
+
     early_stop = 0
     epoch = 0
     num_roll_back = 0
     best_validation_loss = sys.float_info.max
     previous_valid_loss  = sys.float_info.max
     num_batch = {
-        "train": int(4459/amcfg.batch_size),
+        "train": 5,
         # "test":  int(44812/amcfg.batch_size)
     }
 
-    training_epochs  = 1000
-    early_stop_epoch = 5
+    training_epochs  = amcfg.num_epoch
+    early_stop_epoch = amcfg.early_stop_epoch
     nnets_file_name = amcfg.nnets_file_name
     
     while (epoch < training_epochs):
-        epoch = epoch + 1
+        
         epoch_start_time = time.time()
 
-        logger.info('start training Epoch '+str(epoch))
-        
-        for batch_idx in range(num_batch["train"]):
-            x, y = make_a_batch(amcfg, data_norm["x_train"], data_norm["y_train"], amcfg.batch_size)
-            feed_dict = {}
-            feed_dict[rnn_model.am_input]  = x
-            feed_dict[rnn_model.am_target] = y
-            feed_dict[rnn_model.learning_rate_holder] = rnn_model.learning_rate
-            sess.run(rnn_model.train_step, feed_dict=feed_dict)
+        if epoch > 0:
+            logger.info('start training Epoch '+str(epoch))
+            
+            for batch_idx in range(num_batch["train"]):
+                x, y = make_a_batch(amcfg, data_norm["x_train"], data_norm["y_train"], amcfg.batch_size)
+                feed_dict = {}
+                feed_dict[rnn_model.am_input]  = x
+                feed_dict[rnn_model.am_target] = y
+                feed_dict[rnn_model.learning_rate_holder] = rnn_model.learning_rate
+                sess.run(rnn_model.train_step, feed_dict=feed_dict)
             # if batch_idx % (num_train_batch/5) == 0 and batch_idx > 0:
                 # logger.info('finished training '+str(batch_idx)+', loss is '+str(previous_train_output[-1])+', num frames is '+str(num_frames))
 
@@ -221,38 +251,94 @@ def train_NN_iv():
                     early_stop = 0
                     logger.info('saving model, '+nnets_file_name)
                     try:
-                        save_path = rnn_model.saver.save(sess, nnets_file_name)
+                        rnn_model.saver.save(sess, nnets_file_name)
                         # logger.info('use TF saver')
                     except:
                         cPickle.dump(rnn_model, open(nnets_file_name, 'wb'))
                         logger.info('cannot use TF saver; use cPickle')
                     best_validation_loss = valid_error
-                elif valid_error > previous_valid_loss:
+                elif valid_error >= previous_valid_loss:
                     early_stop = early_stop + 1
                     logger.info('reduce learning rate to '+str(rnn_model.learning_rate*0.5))
                     rnn_model.update_learning_rate(rnn_model.learning_rate*0.5)
                 if early_stop > early_stop_epoch:
                     early_stop = 0
                     num_roll_back = num_roll_back + 1
-                    if num_roll_back > 10:
-                        logger.info('reloading ' + str(num_roll_back) + ' times, stopping early, best training '+str(best_validation_loss))
-                        return best_validation_loss
-                    logger.info('loading previous best model, '+nnets_file_name)
-                    try:
-                        rnn_model.saver.restore(sess, nnets_file_name)
-                        # logger.info('use TF saver')
-                    except:
-                        rnn_model = cPickle.load(open(nnets_file_name, 'rb'))
-                        logger.info('cannot use TF saver; use cPickle')
-                    logger.info('reduce learning rate to '+str(rnn_model.learning_rate*0.5))
-                    rnn_model.update_learning_rate(rnn_model.learning_rate*0.5)
+                    # if num_roll_back > 10:
+                    #     logger.info('reloading ' + str(num_roll_back) + ' times, stopping early, best training '+str(best_validation_loss))
+                    #     return best_validation_loss
+                    logger.info('reloading ' + str(num_roll_back) + ' times, loading previous best model, '+nnets_file_name)
+                    rnn_model.saver.restore(sess, nnets_file_name)
+
                 previous_valid_loss = valid_error
 
         epoch_valid_time = time.time()
         output_string = output_string + ', \n  train time is %.2f, test time is %.2f' %((epoch_train_time - epoch_start_time), (epoch_valid_time - epoch_train_time))
         logger.info(output_string)
+
+        epoch = epoch + 1
     sess.close()
+
+def gen_NN():
+
+    test_ID_file_name=work_dir+"test_ID.dat"
+    IDs = cPickle.load(open(test_ID_file_name, 'rb'))
+    # IDs = prices_raw['ID']
+
+    amcfg = acoustic_model_cfg()
+    # amcfg.iv_dim = iv_size
+    logger.info('config tensorflow')
+    tf_config = config_tf(amcfg)
+    logger.info('building model')
+    rnn_model = build_acoustic_model(amcfg)
+    logger.info('start running model')
+    sess = tf.Session(config=tf_config)
+    # tf.global_variables_initializer().run()    
+    # sess.run(rnn_model.init)
+    # rnn_model.saver.restore(sess, nnets_file_name)
+
+    data_norm_file_name=scratch_dir+"data_norm_test.dat"
+    try:
+        logger.info('loading normalised data file '+data_norm_file_name)
+        data_norm = cPickle.load(open(data_norm_file_name, 'rb'))
+    except:
+        logger.info('copy to scratch normalised data file '+data_norm_file_name)
+        shutil.copyfile(work_dir+"data_norm_test.dat", data_norm_file_name)
+        logger.info('loading normalised data file '+data_norm_file_name)
+        data_norm = cPickle.load(open(data_norm_file_name, 'rb'))
+    logger.info(data_norm["x_test"].shape)
+
+    nnets_file_name = amcfg.nnets_file_name
+    rnn_model.saver.restore(sess, nnets_file_name)
+
+    num_samples = data_norm["x_test"].shape[0]
+    num_batches = int( (num_samples - 1 ) / amcfg.batch_size) + 1
+    predict_output_list = []
+
+    for batch_idx in range(num_batches):
+        logger.info('start generating')
+        x, y = make_a_batch_gen(amcfg, data_norm["x_test"], batch_idx, amcfg.batch_size)
+        feed_dict = {}
+        feed_dict[rnn_model.am_input]  = x
+        feed_dict[rnn_model.am_target] = y
+        feed_dict[rnn_model.learning_rate_holder] = rnn_model.learning_rate
+        batch_predict_output = sess.run(fetches=rnn_model.denorm_predict, feed_dict=feed_dict)
+        predict_output_list.append(batch_predict_output)
+
+    predict_output = numpy.concatenate(predict_output_list, axis=0)
+    T = data_norm["x_test"].shape[0]
+    predict_output = predict_output[:T]
+    predict_output_file_name = work_dir+"predict_output.dat"
+    cPickle.dump(predict_output, open(predict_output_file_name, 'wb'))
+
+    sess.close()
+
+
 
 if __name__ == '__main__': 
        
-    train_NN_iv()
+    amcfg = acoustic_model_cfg()
+    if amcfg.TRAINDNN:
+        train_NN()
+    if amcfg.DNNGEN:
+        gen_NN()
