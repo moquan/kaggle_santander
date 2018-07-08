@@ -23,12 +23,17 @@ IDs = cPickle.load(open(test_ID_file_name, 'rb'))
 # predict_output_file_name = work_dir+"predict_output.dat"
 # predict_output = cPickle.load(open(predict_output_file_name, 'rb'))
 T = 49342
-predict_output = numpy.zeros((T,1))
+predict_output = np.zeros((T,1))
 for i in range(T):
-  predict_output[i, 0] = i
+  predict_output[i, 0] = i+1
 
 assert IDs.values.shape[0] == predict_output.shape[0]
 
-for i in range(IDs.values.shape[0]):
-  IDs[i] ...
-  predict_output[i, 0] ...
+# for i in range(IDs.values.shape[0]):
+#   IDs[i] ...
+#   predict_output[i, 0] ...
+
+# with open('submission.csv') as csvfile:
+#   reader = csv.DictReader(csvfile)
+#   for row in reader:
+#     print(IDs[row], predict_ouitput[row,0])
