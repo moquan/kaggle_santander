@@ -16,7 +16,7 @@ if not os.path.exists(scratch_dir):
 min_max_file_name=work_dir+"min_max.dat"
 logger.info('loading min max file '+min_max_file_name)
 min_max = cPickle.load(open(min_max_file_name, 'rb'))
-y_diff = (min_max["y_max"] - min_max["y_min"])
+# y_diff = (min_max["y_max"] - min_max["y_min"])
 
 class acoustic_model_cfg(object):
     def __init__(self, work_dir="/home/dawna/tts/mw545/DVExp/hh"):
@@ -29,13 +29,14 @@ class acoustic_model_cfg(object):
         self.num_epoch     = 200000
         self.early_stop_epoch = 5
         # self.rnn_layer_type = ['LSTM'] * 4
-        self.rnn_layer_type = ['Relu'] * 30
+        self.rnn_layer_type = ['Relu'] * 10
         # self.rnn_layer_type = ['TANH', 'LSTM', 'LSTM', 'TANH', 'TANH']
         # self.high_way = [False, False, False, True, True]
         # self.high_way = [False] + [True] * 29
-        self.high_way = [False] * 30
+        self.high_way = [False] * 10
         # self.rnn_layer_size = [ 128 ] * 5
-        self.rnn_layer_size = [ 2048 ] * 30
+        self.rnn_layer_size = [ 256 ] * 10
+        self.dropout_prob   = [ 0.5 ] * 10
         self.num_rnn_layers = len(self.rnn_layer_type)
         assert self.num_rnn_layers == len(self.rnn_layer_size)
         self.gpu_id = 0
@@ -43,7 +44,7 @@ class acoustic_model_cfg(object):
 
         self.output_dim = 1
 
-        exp_dir = "exp_dnn_mse_"+str(self.num_rnn_layers)
+        exp_dir = "exp_dnn_"+str(self.num_rnn_layers)
         for i in range(min(self.num_rnn_layers, 5)):
             exp_dir = exp_dir + '_' + self.rnn_layer_type[i] + str(self.rnn_layer_size[i]) + str(self.high_way[i])[0]
         self.exp_dir = os.path.join(work_dir, exp_dir)
@@ -78,6 +79,9 @@ class build_acoustic_model(object):
             self.rnn_init_h    = {}
             self.learning_rate = amcfg.learning_rate
             self.learning_rate_holder = tf.placeholder(dtype=tf.float64, name='acoustic_learning_rate_holder')
+            self.dropout_keep_prob = []
+            for i in range(amcfg.num_rnn_layers):
+                self.dropout_keep_prob.append(tf.placeholder(dtype=tf.float32, name='dropout_keep_prob_'+str(i)))
 
             for i in range(amcfg.num_rnn_layers):
                 with tf.variable_scope('acoustic_layer_'+str(i)):
@@ -95,6 +99,9 @@ class build_acoustic_model(object):
                     if amcfg.high_way[i]:
                         assert amcfg.rnn_layer_size[i] == amcfg.rnn_layer_size[i-1]
                         self.rnn_layer_output[i] = self.rnn_layer_output[i] + layer_input
+
+                    if amcfg.dropout_prob[i] > 0:
+                        self.rnn_layer_output[i] = tf.nn.dropout(self.rnn_layer_output[i], keep_prob=self.dropout_keep_prob[i], seed=random.randint(0, 545))
                         
                 # rnn_layer_output.append(layer_output_temp)
                 # rnn_layer_state.append(layer_state_temp)
@@ -103,12 +110,15 @@ class build_acoustic_model(object):
                 self.final_layer_output = tf.contrib.layers.fully_connected(inputs=layer_input, num_outputs=amcfg.output_dim, activation_fn=tf.nn.relu)
 
                 # self.zero_output = tf.zeros(shape=[amcfg.batch_size, amcfg.output_dim])
-                self.denorm_labels  = (self.am_target 
-                    + tf.constant(1., dtype=tf.float64)) * tf.constant(y_diff/2., dtype=tf.float64) + tf.constant(min_max["y_min"], dtype=tf.float64)
+                # self.denorm_labels  = (self.am_target 
+                    # + tf.constant(1., dtype=tf.float64)) * tf.constant(y_diff/2., dtype=tf.float64) + tf.constant(min_max["y_min"], dtype=tf.float64)
                 # self.denorm_predict = tf.maximum((self.final_layer_output 
                     # + tf.constant(1.)) * tf.constant(y_diff/2.) + tf.constant(min_max["y_min"]), self.zero_output)
-                self.denorm_predict = (self.final_layer_output 
-                    + tf.constant(1., dtype=tf.float64)) * tf.constant(y_diff/2., dtype=tf.float64) + tf.constant(min_max["y_min"], dtype=tf.float64)
+                # self.denorm_predict = (self.final_layer_output 
+                    # + tf.constant(1., dtype=tf.float64)) * tf.constant(y_diff/2., dtype=tf.float64) + tf.constant(min_max["y_min"], dtype=tf.float64)
+
+                self.denorm_labels   = self.am_target * tf.constant(min_max["y_max"]/2., dtype=tf.float64)
+                self.denorm_predict  = self.final_layer_output * tf.constant(min_max["y_max"]/2., dtype=tf.float64)
 
                 self.log_labels  = tf.log( self.denorm_labels  + tf.constant(1., dtype=tf.float64))
                 self.log_predict = tf.log( self.denorm_predict + tf.constant(1., dtype=tf.float64))
@@ -119,7 +129,7 @@ class build_acoustic_model(object):
                 # self.loss  = tf.losses.mean_squared_error(labels=self.am_target, predictions=self.final_layer_output)
                 # self.accuracy = tf.count_nonzero(tf.greater(self.am_target * self.final_layer_output, 0.)) * tf.constant(float(1./amcfg.batch_size), name="1_/batch_size")
 
-            self.train_step  = tf.train.AdamOptimizer(learning_rate=self.learning_rate_holder,epsilon=1.e-03).minimize(self.mse)
+            self.train_step  = tf.train.AdamOptimizer(learning_rate=self.learning_rate_holder,epsilon=1.e-03).minimize(self.loss)
 
             # init = tf.initialize_all_variables()
             self.init = tf.global_variables_initializer()
@@ -220,6 +230,8 @@ def train_NN():
                 feed_dict[rnn_model.am_input]  = x
                 feed_dict[rnn_model.am_target] = y
                 feed_dict[rnn_model.learning_rate_holder] = rnn_model.learning_rate
+                for i in range(amcfg.num_rnn_layers):
+                    feed_dict[rnn_model.dropout_keep_prob[i]] = amcfg.dropout_prob[i]
                 sess.run(rnn_model.train_step, feed_dict=feed_dict)
             # if batch_idx % (num_train_batch/5) == 0 and batch_idx > 0:
                 # logger.info('finished training '+str(batch_idx)+', loss is '+str(previous_train_output[-1])+', num frames is '+str(num_frames))
@@ -238,6 +250,8 @@ def train_NN():
                 feed_dict[rnn_model.am_input]  = x
                 feed_dict[rnn_model.am_target] = y
                 feed_dict[rnn_model.learning_rate_holder] = rnn_model.learning_rate
+                for i in range(amcfg.num_rnn_layers):
+                    feed_dict[rnn_model.dropout_keep_prob[i]] = 0.
                 batch_loss = sess.run(fetches=rnn_model.output_list, feed_dict=feed_dict)
                 epoch_loss.append(batch_loss)
             epoch_rmsle_loss = numpy.sqrt(numpy.mean(epoch_loss))
@@ -322,6 +336,8 @@ def gen_NN():
         feed_dict[rnn_model.am_input]  = x
         feed_dict[rnn_model.am_target] = y
         feed_dict[rnn_model.learning_rate_holder] = rnn_model.learning_rate
+        for i in range(amcfg.num_rnn_layers):
+            feed_dict[rnn_model.dropout_keep_prob[i]] = 0.
         batch_predict_output = sess.run(fetches=rnn_model.denorm_predict, feed_dict=feed_dict)
         predict_output_list.append(batch_predict_output)
 
@@ -333,6 +349,49 @@ def gen_NN():
 
     sess.close()
 
+def make_submission():
+    import warnings, copy
+    warnings.filterwarnings('ignore')
+    import pandas as pd
+    import numpy as np
+    from scipy import stats
+    import matplotlib.pyplot as plt
+    # import seaborn as sns
+    # sns.set(style="whitegrid", color_codes=True)
+    import cPickle
+
+    work_dir = '/home/dawna/tts/mw545/DVExp/hh/'
+    work_dir = '/home/dawna/tts/mw545/DVExp/hh/'
+    sub_csv  = work_dir + 'predict_submission.csv'
+
+    test_ID_file_name=work_dir+"test_ID.dat"
+    IDs = cPickle.load(open(test_ID_file_name, 'rb'))
+    # IDs = prices_raw['ID']
+
+    predict_output_file_name = work_dir+"predict_output.dat"
+    predict_output = cPickle.load(open(predict_output_file_name, 'rb'))
+
+    predict_output_temp = cPickle.load(open(predict_output_file_name, 'rb'))
+    n = predict_output_temp.shape[0] * predict_output_temp.shape[1]
+    predict_output = np.zeros((n, 1))
+    for i in range(predict_output_temp.shape[1]):
+      # print predict_output[i*predict_output_temp.shape[0]:(i+1)*predict_output_temp.shape[0]].shape
+      # print predict_output_temp[:,i].shape
+      predict_output[i*predict_output_temp.shape[0]:(i+1)*predict_output_temp.shape[0],0] = np.maximum(predict_output_temp[:,i], 0)
+    predict_output = predict_output[:49342]
+    # T = 49342
+    # predict_output = np.zeros((T,1))
+    # for i in range(T):
+    #   predict_output[i, 0] = i+1
+
+    assert IDs.values.shape[0] == predict_output.shape[0]
+
+    df = pd.DataFrame()
+    df['ID'] = IDs
+    df['target'] = predict_output[:,0]
+    T = ['ID', 'target']
+    df = df[T]
+    df.to_csv(sub_csv, encoding='utf-8', index=False)
 
 
 if __name__ == '__main__': 
@@ -342,3 +401,4 @@ if __name__ == '__main__':
         train_NN()
     if amcfg.DNNGEN:
         gen_NN()
+        make_submission()
